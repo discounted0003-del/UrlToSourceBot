@@ -25,7 +25,7 @@ from telegram.ext import (
 )
 
 # ======================= CONFIG =======================
-BOT_TOKEN = "8538798053:AAGIQT6fFNekXhB_9U7mJXghXFm3BNzLnws" # Apna Token Sahi Karein
+BOT_TOKEN = "8538798053:AAGIQT6fFNekXhB_9U7mJXghXFm3BNzLnws" 
 
 OWNER_ID = 6068463116
 OWNER_USERNAME = "Synaxchatrobot"
@@ -33,10 +33,13 @@ PUBLIC_GROUP = "@synaxLookup"
 
 UPI_ID = "AbhishekXSynax@fam"
 
-PREMIUM_PRICE = 49      # Normal Price
-OFFER_PRICE = 39        # Flash Sale Price
-SUNDAY_PRICE = 29       # Sunday Special Price
-OFFER_CODE = "SAVE39"
+# Default Values (Agar DB na ho toh ye use honge)
+DEFAULT_PRICES = {
+    "normal": 49,
+    "flash": 39,
+    "sunday": 29,
+    "offer_code": "SAVE39"
+}
 
 FREE_DAILY_LIMIT = 2
 PREMIUM_DAYS = 30
@@ -59,7 +62,8 @@ def load_data():
         "total": {},
         "welcome": {},
         "user_names": {},
-        "redeem_codes": {} 
+        "redeem_codes": {},
+        "settings": DEFAULT_PRICES # NEW: Price Settings
     }
 
 def save_data():
@@ -71,7 +75,8 @@ def save_data():
         "total": TOTAL_USAGE,
         "welcome": GROUP_WELCOME,
         "user_names": ALL_USER_NAMES,
-        "redeem_codes": REDEEM_CODES
+        "redeem_codes": REDEEM_CODES,
+        "settings": SETTINGS_DATA # NEW
     }
     try:
         with open(DB_FILE, "wb") as f:
@@ -89,6 +94,7 @@ TOTAL_USAGE = db.get("total", {})
 GROUP_WELCOME = db.get("welcome", {})
 ALL_USER_NAMES = db.get("user_names", {})
 REDEEM_CODES = db.get("redeem_codes", {}) 
+SETTINGS_DATA = db.get("settings", DEFAULT_PRICES) # NEW LOAD
 
 # Temporary Memory
 OFFER_TIMERS = {}
@@ -98,6 +104,7 @@ WAITING_SCREENSHOT = set()
 WAITING_SUPPORT = set()
 ADMIN_REPLY_TRACK = {} 
 LAST_NORMAL_OFFER_TIME = 0 
+SETTING_MODE = {} # New: For Owner setting price mode
 
 # ======================= HELPERS =======================
 def today():
@@ -147,7 +154,6 @@ async def is_joined(context, uid):
     except:
         return False
 
-# --- ADMIN CHECKER HELPER ---
 async def is_admin(update, context):
     """Check if user is Admin in the group or Owner"""
     try:
@@ -160,10 +166,9 @@ async def is_admin(update, context):
         pass
     return False
 
-# ======================= NEW FEATURES: REDEEM CODE SYSTEM =======================
+# ======================= REDEEM CODE SYSTEM =======================
 
 async def generate_redeem_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Owner creates a code: /gen <code_name> <days> <max_users>"""
     if update.effective_user.id != OWNER_ID: return
 
     try:
@@ -196,7 +201,6 @@ async def generate_redeem_code(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ **Error:** Format is `/gen <name> <days> <max_users>`\nExample: `/gen SALE30 30 50`")
 
 async def redeem_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """User redeems a code: /redeem <code_name>"""
     uid = update.effective_user.id
     if uid in BANNED_USERS: return
 
@@ -204,31 +208,25 @@ async def redeem_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
         code_name = context.args[0].upper()
         code_data = REDEEM_CODES.get(code_name)
 
-        # 1. Check if code exists
         if not code_data:
             await update.message.reply_text("❌ **Invalid Code!**\nYeh code exist hi nahi karta.")
             return
         
-        # 2. Check if code is expired or max limit reached
         if code_data["used_count"] >= code_data["max_users"]:
             await update.message.reply_text("❌ **Code Expired!**\nIs code ki limit khatam ho chuki hai.")
             return
 
-        # 3. Grant Premium
         current_time = time.time()
         added_seconds = code_data["days"] * 86400
         
-        # Logic: Extend if already premium, else new
         if uid in PREMIUM_USERS and PREMIUM_USERS[uid] > current_time:
             PREMIUM_USERS[uid] += added_seconds
         else:
             PREMIUM_USERS[uid] = current_time + added_seconds
 
-        # 4. Update Code Usage
         REDEEM_CODES[code_name]["used_count"] += 1
         save_data()
 
-        # 5. Success Message
         await update.message.reply_text(
             f"🎉 **Redeem Successful!**\n\n"
             f"💎 **+{code_data['days']} Days Added!**\n"
@@ -241,7 +239,6 @@ async def redeem_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Usage: `/redeem <code_name>`")
 
 async def list_redeem_codes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Owner sees all codes and stats"""
     if update.effective_user.id != OWNER_ID: return
 
     if not REDEEM_CODES:
@@ -263,7 +260,6 @@ async def list_redeem_codes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def revoke_redeem_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Owner deletes a code"""
     if update.effective_user.id != OWNER_ID: return
     
     try:
@@ -278,7 +274,6 @@ async def revoke_redeem_code(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("❌ Usage: `/delcode <name>`")
 
 async def reset_user_usage(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin/Owner can reset a user's daily limit"""
     if update.effective_user.id != OWNER_ID: return
     try:
         uid = int(context.args[0])
@@ -294,14 +289,12 @@ async def reset_user_usage(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ======================= PREVIOUS FEATURES =======================
 
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Saves Chat/Channel ID when bot is added or sees activity"""
     chat_id = update.effective_chat.id
     if chat_id not in ALL_GROUPS:
         ALL_GROUPS.add(chat_id)
         save_data()
 
 async def anti_admin_protection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Punishes admin for kicking members (Group Only)"""
     result = update.chat_member
     if not result or update.effective_chat.type == "channel": return
     if result.new_chat_member.status in ["kicked", "left"]:
@@ -313,30 +306,26 @@ async def anti_admin_protection(update: Update, context: ContextTypes.DEFAULT_TY
             except: pass
 
 async def promote_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Owner can promote user by Reply OR Username OR User ID"""
     if update.effective_user.id != OWNER_ID: return
     
     target_id = None
     
-    # 1. Logic for Reply
     if update.message.reply_to_message:
         target_id = update.message.reply_to_message.from_user.id
     
-    # 2. Logic for Username or ID (e.g., /promote @Rahul or /promote 12345)
     elif context.args:
         arg = context.args[0]
         if arg.isdigit():
             target_id = int(arg)
         else:
             username_to_find = arg.replace("@", "").lower()
-            # Bot searches in its database ALL_USER_NAMES
             for uid, info in ALL_USER_NAMES.items():
                 if f"(@{username_to_find})" in info.lower():
                     target_id = uid
                     break
     
     if not target_id:
-        await update.message.reply_text("⚠️ User ko pehchan nahi paya. Ya toh message par Reply karein ya sahi @username likhein (User ne bot ko kam se kam ek baar start kiya hona chahiye).")
+        await update.message.reply_text("⚠️ User ko pehchan nahi paya. Ya toh message par Reply karein ya sahi @username likhein.")
         return
 
     try:
@@ -355,12 +344,258 @@ async def promote_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("❌ Error: Bot ko group mein 'Add Admins' permission chahiye.")
 
+def generate_qr_image(amount):
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=10,
+        border=4,
+    )
+    upi_link = f"upi://pay?pa={UPI_ID}&pn=URLSourceZIP&am={amount}&cu=INR"
+    qr.add_data(upi_link)
+    qr.make(fit=True)
+    
+    img = qr.make_image(fill_color="black", back_color="white")
+    return img
+
+# ======================= OWNER PANEL (NEW) =======================
+
+async def owner_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows the Main Owner Dashboard"""
+    if update.effective_user.id != OWNER_ID: 
+        await update.message.reply_text("🚫 Sirf Owner is command use kar sakta hai!")
+        return
+
+    total = len(ALL_USERS)
+    prem = len(PREMIUM_USERS)
+    
+    normal_p = SETTINGS_DATA.get("normal", DEFAULT_PRICES["normal"])
+    flash_p = SETTINGS_DATA.get("flash", DEFAULT_PRICES["flash"])
+    sunday_p = SETTINGS_DATA.get("sunday", DEFAULT_PRICES["sunday"])
+
+    text = (
+        f"👑 **OWNER DASHBOARD**\n\n"
+        f"📊 **Total Users:** `{total}`\n"
+        f"💎 **Premium Users:** `{prem}`\n\n"
+        f"💰 **PRICING:**\n"
+        f"Normal: ₹{normal_p} | Flash: ₹{flash_p} | Sun: ₹{sunday_p}\n\n"
+        f"👇 **Select an Option:**"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("💰 Pricing", callback_data="own_price"),
+            InlineKeyboardButton("📢 Broadcast", callback_data="own_bcast")
+        ],
+        [
+            InlineKeyboardButton("🎟 Redeem Codes", callback_data="own_redeem"),
+            InlineKeyboardButton("👥 User Control", callback_data="own_users")
+        ],
+        [
+            InlineKeyboardButton("🔧 Maintenance", callback_data="own_maint"),
+            InlineKeyboardButton("📊 Stats", callback_data="own_stats")
+        ],
+        [InlineKeyboardButton("❌ Close", callback_data="own_close")]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+
+async def owner_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles button clicks in Owner Panel"""
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+
+    if uid != OWNER_ID:
+        await query.edit_message_text("🚫 Access Denied!")
+        return
+
+    data = query.data
+    message_id = query.message.message_id
+
+    # --- MAIN MENU LOGIC ---
+    if data == "own_close":
+        try:
+            await query.delete_message()
+        except: pass
+    
+    elif data == "own_main":
+        # Refresh Main Menu
+        await owner_menu_callback_logic(query, context)
+
+    # --- PRICING MENU ---
+    elif data == "own_price":
+        normal_p = SETTINGS_DATA.get("normal", DEFAULT_PRICES["normal"])
+        flash_p = SETTINGS_DATA.get("flash", DEFAULT_PRICES["flash"])
+        sunday_p = SETTINGS_DATA.get("sunday", DEFAULT_PRICES["sunday"])
+        
+        keyboard = [
+            [
+                InlineKeyboardButton(f"Normal: ₹{normal_p} ✏️", callback_data="set_p_normal"),
+                InlineKeyboardButton(f"Flash: ₹{flash_p} ✏️", callback_data="set_p_flash")
+            ],
+            [
+                InlineKeyboardButton(f"Sunday: ₹{sunday_p} ✏️", callback_data="set_p_sunday"),
+                InlineKeyboardButton("⬅️ Back", callback_data="own_main")
+            ]
+        ]
+        await query.edit_message_text(
+            "💰 **Price Settings**\n\nClick on a price to edit it.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    # --- SETTING PRICE (Step 1: Ask for Input) ---
+    elif data.startswith("set_p_"):
+        price_type = data.split("_")[2] # normal, flash, sunday
+        SETTING_MODE[uid] = f"SET_PRICE_{price_type.upper()}"
+        
+        type_text = price_type.capitalize()
+        await query.edit_message_text(
+            f"✍️ **Set {type_text} Price**\n\n"
+            f"Abhi naya price number bhejo (Example: 50)",
+            parse_mode="Markdown"
+        )
+
+    # --- BROADCAST SHORTCUT ---
+    elif data == "own_bcast":
+        keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="own_main")]]
+        await query.edit_message_text(
+            "📢 **Broadcasting Shortcut**\n\n"
+            "Format:\n`/broadcast Your Message Here`\n\n"
+            "For Media:\nReply to photo/video and do `/broadcast`",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    # --- REDEEM CODES SHORTCUT ---
+    elif data == "own_redeem":
+        keyboard = [
+            [InlineKeyboardButton("📜 List Codes", callback_data="list_codes_now")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="own_main")]
+        ]
+        await query.edit_message_text(
+            "🎟 **Redeem Codes**\n\n"
+            "Commands:\n"
+            "`/gen <name> <days> <limit>` - Create Code\n"
+            "`/delcode <name>` - Delete Code",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    elif data == "list_codes_now":
+        # Reuse existing list function logic
+        if not REDEEM_CODES:
+            await query.answer("📭 No codes found.")
+            return
+        msg = "📊 **CODES:**\n\n"
+        for code, d in REDEEM_CODES.items():
+            msg += f"`{code}` ({d['used_count']}/{d['max_users']})\n"
+        keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="own_redeem")]]
+        await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    # --- USER CONTROL ---
+    elif data == "own_users":
+        keyboard = [
+            [InlineKeyboardButton("🔄 Reset All Usage", callback_data="act_reset_all")],
+            [InlineKeyboardButton("📜 List Users", callback_data="act_list_users")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="own_main")]
+        ]
+        await query.edit_message_text(
+            "👥 **User Control**\n\nManage users or reset daily limits.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif data == "act_reset_all":
+        # Reset all usage for the day
+        count = 0
+        for uid in USER_USAGE:
+            USER_USAGE[uid]["count"] = 0
+            count += 1
+        save_data()
+        await query.answer(f"✅ Reset usage for {count} users!")
+        keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="own_users")]]
+        await query.edit_message_text("✅ **Reset Complete!**\n\nAll users' daily limits are now 0.", reply_markup=InlineKeyboardMarkup(keyboard))
+        
+    # --- MAINTENANCE ---
+    elif data == "own_maint":
+        keyboard = [
+            [InlineKeyboardButton("🗑 Clear DB Usage", callback_data="act_clear_db")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="own_main")]
+        ]
+        await query.edit_message_text(
+            "🔧 **Maintenance**\n\nDangerous Zone! Be careful.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    elif data == "act_clear_db":
+        # Clear usage dict completely
+        global USER_USAGE
+        USER_USAGE.clear()
+        save_data()
+        await query.answer("🗑 Database Cleared")
+        keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="own_main")]]
+        await query.edit_message_text("✅ **Usage Database Cleared!**", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    # --- STATS ---
+    elif data == "own_stats":
+        total = len(ALL_USERS)
+        prem = len(PREMIUM_USERS)
+        codes = len(REDEEM_CODES)
+        
+        msg = (
+            f"📊 **LIVE STATS**\n\n"
+            f"👥 Total Users: `{total}`\n"
+            f"💎 Premium Users: `{prem}`\n"
+            f"⚪ Free Users: `{total - prem}`\n"
+            f"🎟 Active Codes: `{codes}`\n"
+            f"📅 Date: `{today()}`"
+        )
+        keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="own_main")]]
+        await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+# Helper to redraw main menu without requiring a full new object
+async def owner_menu_callback_logic(query, context):
+    total = len(ALL_USERS)
+    prem = len(PREMIUM_USERS)
+    normal_p = SETTINGS_DATA.get("normal", DEFAULT_PRICES["normal"])
+    flash_p = SETTINGS_DATA.get("flash", DEFAULT_PRICES["flash"])
+    sunday_p = SETTINGS_DATA.get("sunday", DEFAULT_PRICES["sunday"])
+
+    text = (
+        f"👑 **OWNER DASHBOARD**\n\n"
+        f"📊 **Total Users:** `{total}`\n"
+        f"💎 **Premium Users:** `{prem}`\n\n"
+        f"💰 **PRICING:**\n"
+        f"Normal: ₹{normal_p} | Flash: ₹{flash_p} | Sun: ₹{sunday_p}\n\n"
+        f"👇 **Select an Option:**"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("💰 Pricing", callback_data="own_price"),
+            InlineKeyboardButton("📢 Broadcast", callback_data="own_bcast")
+        ],
+        [
+            InlineKeyboardButton("🎟 Redeem Codes", callback_data="own_redeem"),
+            InlineKeyboardButton("👥 User Control", callback_data="own_users")
+        ],
+        [
+            InlineKeyboardButton("🔧 Maintenance", callback_data="own_maint"),
+            InlineKeyboardButton("📊 Stats", callback_data="own_stats")
+        ],
+        [InlineKeyboardButton("❌ Close", callback_data="own_close")]
+    ]
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
 # ======================= START =======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user = update.effective_user
     
-    # Save user details for dashboard (FIXED: Updates every time)
     u_name = f"@{user.username}" if user.username else "No Username"
     ALL_USER_NAMES[uid] = f"{user.full_name} ({u_name})"
     save_data()
@@ -369,7 +604,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚫 **You are BANNED!**", parse_mode="Markdown")
         return
 
-    # --- NEW: SEND NEW USER DATA TO OWNER ---
     if uid not in ALL_USERS:
         ALL_USERS.add(uid)
         save_data()
@@ -384,7 +618,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(OWNER_ID, log_msg, parse_mode="Markdown")
         except:
             pass
-    # ---------------------------------------
 
     if not await is_joined(context, uid):
         kb = InlineKeyboardMarkup([
@@ -435,7 +668,7 @@ async def check_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# ======================= STATUS & CHECK (UPDATED WITH MIN/HRS/DAYS) =======================
+# ======================= STATUS & CHECK =======================
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid in BANNED_USERS: return
@@ -444,19 +677,13 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         exp_timestamp = PREMIUM_USERS[uid]
         ist = timezone(timedelta(hours=5, minutes=30))
         dt_object = datetime.fromtimestamp(exp_timestamp, ist)
-        
-        # FIXED DATE FORMAT: 25 December 2025 at 09:30 AM
         exp_date_str = dt_object.strftime("%d %B %Y at %I:%M %p")
-        
         remaining_seconds = exp_timestamp - time.time()
-        
-        # --- DAYS CALCULATION ADDED ---
         days = int(remaining_seconds // 86400)
         hours = int((remaining_seconds % 86400) // 3600)
         minutes = int((remaining_seconds % 3600) // 60)
         
         if days < 0: days, hours, minutes = 0, 0, 0
-        
         count = TOTAL_USAGE.get(uid, 0)
         
         await update.message.reply_text(
@@ -503,7 +730,7 @@ async def admin_check_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("⚠️ **Use:** `/check <uid>`", parse_mode="Markdown")
 
-# ======================= BUY (FIXED WITH SMART FALLBACK) =======================
+# ======================= BUY (DYNAMIC PRICES) =======================
 async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid in BANNED_USERS: return
@@ -511,97 +738,87 @@ async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_time = time.time()
     offer_end_time = OFFER_TIMERS.get(uid, 0)
     
+    # GET PRICES FROM SETTINGS
+    s_price = SETTINGS_DATA.get("sunday", DEFAULT_PRICES["sunday"])
+    o_price = SETTINGS_DATA.get("flash", DEFAULT_PRICES["flash"])
+    n_price = SETTINGS_DATA.get("normal", DEFAULT_PRICES["normal"])
+    
     if is_sunday():
-        amount = SUNDAY_PRICE
+        amount = s_price
         caption_text = (
             f"🔥 **SUNDAY SPECIAL OFFER!** 🔥\n"
             f"💰 **Price: ₹{amount} ONLY** (Huge Discount)\n"
             f"🚀 **Validity:** 30 Days Premium\n"
-            f"⏳ Sirf aaj ke liye valid!"
+            f"⏳ Sirf aaj ke liye valid!\n\n"
+            "👇 QR Scan karke Screenshot bhejo!"
         )
     elif current_time < offer_end_time:
-        amount = OFFER_PRICE
+        amount = o_price
         minutes_left = int((offer_end_time - current_time) / 60)
         caption_text = (
             f"⚡ **FLASH SALE ACTIVE!** ⚡\n"
-            f"💰 **Price: ₹{amount}** (Save 20%)\n"
+            f"💰 **Price: ₹{amount}** (Save ₹{n_price - amount})\n"
             f"⏳ Ends in: {minutes_left} Minutes\n"
-            f"🏷 Code: `{OFFER_CODE}` applied!"
+            f"🏷 Code: `{OFFER_CODE}` applied!\n\n"
+            "Jaldi pay karein aur screenshot bhejein!"
         )
     else:
-        amount = PREMIUM_PRICE
+        amount = n_price
         caption_text = (
             f"💎 **PREMIUM PLAN**\n"
             f"💰 **Price: ₹{amount}** / Month\n"
             f"🚀 Unlimited Extracts\n"
-            f"📂 Bulk Access"
+            f"📂 Bulk Access\n\n"
+            "Pay karke screenshot bhejein."
         )
 
-    # --- SMART QR LOGIC ---
     try:
-        # 1. Try to Generate QR Image
-        # We import constants here just to be safe
-        from qrcode import constants
-        qr = qrcode.QRCode(
-            version=1,
-            error_correction=constants.ERROR_CORRECT_L,
-            box_size=10,
-            border=4,
-        )
-        upi_link = f"upi://pay?pa={UPI_ID}&pn=URLSourceZIP&am={amount}&cu=INR"
-        qr.add_data(upi_link)
-        qr.make(fit=True)
-        
-        # CRITICAL: This requires PIL (Pillow). 
-        img = qr.make_image(fill_color="black", back_color="white")
-        
-        # If successful, convert to BytesIO
+        img = generate_qr_image(amount)
         bio = BytesIO()
         img.save(bio, "PNG")
         bio.seek(0)
         
-        # Keyboard
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📸 Send Screenshot", callback_data="send_ss")]
         ])
 
-        # Send Photo
         await update.message.reply_photo(
             photo=bio,
             filename="upi_qr.png", 
-            caption=caption_text + "\n\n👇 Scan QR or Send Screenshot:",
+            caption=caption_text,
             parse_mode="Markdown",
             reply_markup=kb
         )
         
     except Exception as e:
-        # --- FALLBACK IF QR FAILS (PIL MISSING OR OTHER ERROR) ---
-        print(f"QR Image Error: {e}. Switching to Button Mode.")
+        error_str = str(e)
+        print(f"QR Error: {e}")
 
-        # UPI Link for button
-        upi_link = f"upi://pay?pa={UPI_ID}&pn=URLSourceZIP&am={amount}&cu=INR"
-        
-        # Keyboard with Pay Button
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💳 Pay Now (Open App)", url=upi_link)],
-            [InlineKeyboardButton("📸 Send Screenshot", callback_data="send_ss")]
-        ])
+        if "PIL" in error_str or "No module named" in error_str:
+            upi_link = f"upi://pay?pa={UPI_ID}&pn=URLSourceZIP&am={amount}&cu=INR"
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Pay Now (UPI)", url=upi_link)],
+                [InlineKeyboardButton("📸 Send Screenshot", callback_data="send_ss")]
+            ])
 
-        # Send Text Message instead
-        await update.message.reply_text(
-            f"{caption_text}\n\n"
-            f"🆔 **UPI ID:** `{UPI_ID}`\n"
-            f"👇 Click 'Pay Now' button below to pay.",
-            parse_mode="Markdown",
-            reply_markup=kb
-        )
+            await update.message.reply_text(
+                f"⚠️ **QR Image Generation Failed**\n\n"
+                f"💰 **Pay Amount:** ₹{amount}\n"
+                f"🆔 **UPI ID:** `{UPI_ID}`\n\n"
+                f"👇 Click 'Pay Now' button below to open payment app directly.\n"
+                f"📸 After payment, tap 'Send Screenshot'.",
+                parse_mode="Markdown",
+                reply_markup=kb
+            )
+        else:
+            await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def ask_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     WAITING_SCREENSHOT.add(update.callback_query.from_user.id)
     await update.message.reply_text("📸 Screenshot bhejo")
 
-# ======================= CALLBACK HANDLER (ONE-CLICK LOGIC) =======================
+# ======================= CALLBACK HANDLER =======================
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     data = q.data
@@ -628,8 +845,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         WAITING_SCREENSHOT.add(q.from_user.id)
         await q.message.reply_text("📸 Screenshot bhejo")
 
-
-    # ONE-CLICK APPROVE (TOTAL DATE SYSTEM)
+    # ONE-CLICK APPROVE
     elif data.startswith("adm_ap_"):
         uid = int(data.split("_")[2])
         current_time = time.time()
@@ -663,12 +879,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         save_data()
         await context.bot.send_message(uid, user_msg, parse_mode="Markdown")
-        
-        # Edit Owner Message
         try:
             await q.edit_message_caption(caption=f"✅ **User {uid} Approved!** ({msg_type})")
-        except:
-            pass
+        except: pass
 
     # ONE-CLICK REJECT
     elif data.startswith("adm_rj_"):
@@ -845,7 +1058,6 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Use: /broadcast Message | Button Name | Link")
         return
 
-    # Button Logic Parsing
     content = raw_text
     reply_markup = None
     if "|" in raw_text:
@@ -896,7 +1108,6 @@ async def post_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if msg.text: raw_text = " ".join(context.args)
     elif msg.caption: raw_text = msg.caption.replace("/post", "").strip()
 
-    # Button Logic
     content = raw_text
     reply_markup = None
     if "|" in raw_text:
@@ -906,7 +1117,7 @@ async def post_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(parts[1], url=parts[2])]])
 
     try:
-        await msg.delete() # Identity Hide
+        await msg.delete() 
         if msg.photo:
             await context.bot.send_photo(chat_id, photo=msg.photo[-1].file_id, caption=content, reply_markup=reply_markup, parse_mode="Markdown")
         elif msg.video:
@@ -971,13 +1182,11 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_text = " ".join(context.args)
         if not reply_text: return
 
-        # Send message as bot
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=reply_text,
             reply_to_message_id=update.message.reply_to_message.message_id
         )
-        # Delete owner's command
         try:
             await update.message.delete()
         except:
@@ -987,7 +1196,6 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # 2. SET WELCOME COMMAND
 async def set_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Only Admin or Owner can set welcome message
     if not await is_admin(update, context):
         await update.message.reply_text("🚫 Sirf Admin ye command use kar sakta hai!")
         return
@@ -1003,7 +1211,6 @@ async def set_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_id = update.effective_chat.id
     
-    # Check for buttons (separated by |)
     parts = [p.strip() for p in text.split('|')]
     
     welcome_data = {'text': parts[0]}
@@ -1016,7 +1223,7 @@ async def set_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ **Welcome Message Set!** (No Button)\n\nMsg: {parts[0]}")
     
     GROUP_WELCOME[chat_id] = welcome_data
-    save_data() # Save Welcome
+    save_data()
 
 # 3. NEW MEMBER HANDLER (Sends Welcome)
 async def new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1027,7 +1234,6 @@ async def new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = data['text']
         reply_markup = None
         
-        # Add button if exists
         if 'btn_text' in data and 'btn_url' in data:
             reply_markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton(data['btn_text'], url=data['btn_url'])]
@@ -1043,22 +1249,26 @@ async def send_auto_offers(context: ContextTypes.DEFAULT_TYPE):
     
     should_run_normal = False
     if not sunday_mode:
-        if current_time - LAST_NORMAL_OFFER_TIME > 43200: 
+        if current_time - LAST_NORMAL_OFFER_TIME >43200: 
             should_run_normal = True
             LAST_NORMAL_OFFER_TIME = current_time
         else:
             return 
+
+    # Get current flash price for message
+    flash_p = SETTINGS_DATA.get("flash", DEFAULT_PRICES["flash"])
 
     for uid in ALL_USERS:
         if uid in BANNED_USERS: continue 
         if is_premium(uid) or uid == OWNER_ID: continue
 
         if sunday_mode:
+            s_price = SETTINGS_DATA.get("sunday", DEFAULT_PRICES["sunday"])
             try:
                 await context.bot.send_message(
                     chat_id=uid,
                     text="🔥 **SUNDAY SPECIAL OFFER!** 🔥\n\n"
-                         f"Sirf aaj Premium lein **₹{SUNDAY_PRICE}** mein!\n"
+                         f"Sirf aaj Premium lein **₹{s_price}** mein!\n"
                          "✅ Unlimited Access.\n"
                          "✅ Koi Daily Limit Nahi.\n\n"
                          "👉 Abhi `/buy` dabayein!",
@@ -1074,7 +1284,7 @@ async def send_auto_offers(context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(
                     chat_id=uid,
                     text="⚡ **LIMITED TIME DEAL!** ⚡\n\n"
-                         f"Premium sirf Rs {OFFER_PRICE} mein!\n"
+                         f"Premium sirf Rs {flash_p} mein!\n"
                          "👉 Jaldi `/buy` dabayein!",
                     parse_mode="Markdown"
                 )
@@ -1102,7 +1312,7 @@ async def check_expiry_alerts(context: ContextTypes.DEFAULT_TYPE):
                 except:
                     pass
 
-# ======================= EXTRACT (FIXED) =======================
+# ======================= EXTRACT =======================
 async def extract(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if update.message.text:
@@ -1114,7 +1324,6 @@ async def extract(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚫 **You are BANNED!**", parse_mode="Markdown")
         return
 
-    # Check Join
     if not await is_joined(context, uid):
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔗 Join Group", url="https://t.me/SynaxLookup")],
@@ -1130,7 +1339,6 @@ async def extract(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Check Limit
     if not can_use(uid):
         await update.message.reply_text(
             "❌ Daily Limit Reached!\n"
@@ -1144,7 +1352,6 @@ async def extract(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text("🌐 **Connecting to website...**\n⏳ Please wait...")
 
     try:
-        # FAKE HEADERS (Fix for blocking)
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
@@ -1152,9 +1359,7 @@ async def extract(update: Update, context: ContextTypes.DEFAULT_TYPE):
         r = requests.get(url, headers=headers, timeout=20)
         r.raise_for_status()
 
-        # ==================== USAGE UPDATE ====================
         update_usage(uid)
-        # =======================================================
 
         soup = BeautifulSoup(r.text, "html.parser")
 
@@ -1183,13 +1388,10 @@ async def extract(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         zip_buf.seek(0)
         size_kb = len(zip_buf.getvalue()) / 1024
-        
-        # FILE NAME FIX
         zip_buf.name = "website_source.zip"
         
         await status_msg.delete()
         
-        # DIRECT SEND (InputFile Removed)
         await update.message.reply_document(
             document=zip_buf,
             filename="website_source.zip",
@@ -1204,17 +1406,34 @@ async def extract(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await status_msg.edit_text(f"❌ **Error:** {str(e)}\n\nWebsite secure ho sakti hai ya link galat hai.")
 
-# ======================= ROUTER (WITH ANTI-SPAM) =======================
+# ======================= ROUTER (WITH ANTI-SPAM & SETTINGS) =======================
 async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid in BANNED_USERS: return
 
-    # --- TRACK CHANNEL/GROUP ON ACTIVITY ---
     if update.effective_chat.id not in ALL_GROUPS:
         ALL_GROUPS.add(update.effective_chat.id)
         save_data()
 
     text = update.message.text.strip() if update.message.text else ""
+
+    # --- NEW: OWNER SETTING PRICE MODE ---
+    if uid == OWNER_ID and uid in SETTING_MODE:
+        mode = SETTING_MODE.pop(uid)
+        try:
+            new_price = int(text)
+            if mode == "SET_PRICE_NORMAL":
+                SETTINGS_DATA["normal"] = new_price
+            elif mode == "SET_PRICE_FLASH":
+                SETTINGS_DATA["flash"] = new_price
+            elif mode == "SET_PRICE_SUNDAY":
+                SETTINGS_DATA["sunday"] = new_price
+            
+            save_data()
+            await update.message.reply_text(f"✅ **Price Updated to ₹{new_price}!**")
+        except ValueError:
+            await update.message.reply_text("❌ Invalid number. Please send a valid price (e.g. 50).")
+        return
 
     # --- 1. ADMIN DIRECT REPLY (NEW) ---
     if uid == OWNER_ID and uid in ADMIN_REPLY_TRACK:
@@ -1228,19 +1447,16 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- 2. ANTI-SPAM (GROUP ONLY) ---
     if update.effective_chat.type in ["group", "supergroup"]:
-        # Check if user is Admin/Owner/Bot
         is_user_admin = await is_admin(update, context)
         
-        # Agar Admin NAHI hai, to check karo
         if not is_user_admin:
-            # Check for Link OR Username (@)
             if any(word.startswith("@") for word in text.split()) or \
                any(x in text for x in ["http", "https", "www.", ".com", ".me", ".xyz"]):
                 try:
                     await update.message.delete()
                 except:
                     pass
-                return # Delete karke return (Bot aage reply nahi karega)
+                return
 
     # --- 3. SUPPORT LOGIC (DM Only) ---
     if uid in WAITING_SUPPORT:
@@ -1263,9 +1479,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-# ======================= MEDIA COMMAND ROUTER (FIXED) =======================
+# ======================= MEDIA COMMAND ROUTER =======================
 async def media_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Catch /post or /broadcast in media captions (GROUP + DM safe)"""
     msg = update.effective_message
     if not msg:
         return
@@ -1295,25 +1510,27 @@ def main():
     app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CommandHandler("msg", admin_msg))
     
-    # NEW COMMANDS ADDED HERE
+    # OWNER COMMANDS
+    app.add_handler(CommandHandler("owner", owner_menu))
     app.add_handler(CommandHandler("promote", promote_user))
     app.add_handler(CommandHandler("reply", admin_reply))
     app.add_handler(CommandHandler("setwelcome", set_welcome))
     app.add_handler(CommandHandler("post", post_command))
     
-    # --- ADVANCED REDEEM SYSTEM HANDLERS ---
-    app.add_handler(CommandHandler("gen", generate_redeem_code))       # Owner: Create Code
-    app.add_handler(CommandHandler("redeem", redeem_code))             # User: Use Code
-    app.add_handler(CommandHandler("codes", list_redeem_codes))        # Owner: List Codes
-    app.add_handler(CommandHandler("delcode", revoke_redeem_code))     # Owner: Delete Code
-    app.add_handler(CommandHandler("reset", reset_user_usage))         # Owner: Reset Daily Limit
+    # REDEEM SYSTEM
+    app.add_handler(CommandHandler("gen", generate_redeem_code))       
+    app.add_handler(CommandHandler("redeem", redeem_code))             
+    app.add_handler(CommandHandler("codes", list_redeem_codes))        
+    app.add_handler(CommandHandler("delcode", revoke_redeem_code))     
+    app.add_handler(CommandHandler("reset", reset_user_usage))         
     
     # HANDLERS
     app.add_handler(ChatMemberHandler(anti_admin_protection, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, new_member))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS | filters.StatusUpdate.CHAT_CREATED, track_chats))
     
-    app.add_handler(CallbackQueryHandler(button_callback))
+    app.add_handler(CallbackQueryHandler(owner_callback, pattern="^own_")) # Owner Panel Callbacks
+    app.add_handler(CallbackQueryHandler(button_callback)) # General Callbacks
     app.add_handler(MessageHandler(
         (filters.PHOTO | filters.VIDEO | filters.Document.ALL) & filters.CaptionRegex(r'^/(post|broadcast)'),
         media_command_router
@@ -1321,18 +1538,15 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
 
-    # --- FIXED JOBQUEUE SECTION ---
     if app.job_queue:
         job_queue = app.job_queue
         job_queue.run_repeating(send_auto_offers, interval=600, first=10)
         job_queue.run_repeating(check_expiry_alerts, interval=86400, first=60)
         print("✅ JobQueue Active: Auto-offers enabled.")
     else:
-        print("⚠️ WARNING: JobQueue is NOT initialized. Auto-offers and expiry alerts are disabled.")
-        print("💡 FIX: Add 'python-telegram-bot[job-queue]' to requirements.txt")
-    # ------------------------------
+        print("⚠️ WARNING: JobQueue is NOT initialized.")
 
-    print("🔥 BOT RUNNING – NEW MESSAGE UPDATE")
+    print("🔥 BOT RUNNING – OWNER PANEL ACTIVE")
     app.run_polling()
 
 if __name__ == "__main__":
